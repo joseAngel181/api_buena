@@ -12,3 +12,4 @@ bcrypt = "0.15"
 utoipa = { version = "4.2", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "6.0", features = ["axum"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }
+jsonwebtoken = "9.3"

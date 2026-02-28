@@ -9,6 +9,8 @@ use bcrypt::{hash, verify, DEFAULT_COST};
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Pool, Row, Sqlite};
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
+use jsonwebtoken::{encode, decode, Header, Algorithm, Validation, EncodingKey, DecodingKey};
 use utoipa::{
     openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
     Modify, OpenApi, ToSchema,
@@ -34,7 +36,7 @@ struct ProductoResponse { id: u32, nombre: String, precio: f64 }
 struct MensajeResponse { mensaje: String }
 
 // ==========================================
-// SEGURIDAD (TOKEN BEARER)
+// SEGURIDAD: JWT (JSON WEB TOKENS)
 // ==========================================
 struct SecurityAddon;
 impl Modify for SecurityAddon {
@@ -47,10 +49,24 @@ impl Modify for SecurityAddon {
     }
 }
 
+// Estructura interna del Token
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String, // El usuario
+    exp: usize,  // Fecha de expiración
+}
+
+const SECRET_KEY: &[u8] = b"mi_super_secreto_universitario_123";
+
+// Función para validar que el token criptográfico sea real y no haya caducado
 fn verificar_token(headers: &HeaderMap) -> bool {
     if let Some(auth_header) = headers.get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
-            return auth_str == "Bearer token_secreto_api_123";
+            if auth_str.starts_with("Bearer ") {
+                let token = auth_str.trim_start_matches("Bearer ");
+                let validation = Validation::new(Algorithm::HS256);
+                return decode::<Claims>(token, &DecodingKey::from_secret(SECRET_KEY), &validation).is_ok();
+            }
         }
     }
     false
@@ -70,14 +86,20 @@ async fn registrar_usuario(State(pool): State<Pool<Sqlite>>, Json(payload): Json
     }
 }
 
-// --- LOGIN Y GENERACIÓN DE TOKEN (POST) ---
+// --- LOGIN Y GENERACIÓN DE JWT DINÁMICO (POST) ---
 #[utoipa::path(post, path = "/api/v1/login", request_body = AuthRequest, responses((status = 200, description = "Login exitoso", body = AuthResponse), (status = 401, description = "Credenciales inválidas")))]
 async fn login(State(pool): State<Pool<Sqlite>>, Json(payload): Json<AuthRequest>) -> Result<Json<AuthResponse>, StatusCode> {
     let record = sqlx::query("SELECT password_hash FROM users WHERE username = ?").bind(&payload.usuario).fetch_optional(&pool).await.unwrap();
     if let Some(row) = record {
         let hash_guardado: String = row.try_get("password_hash").unwrap();
         if verify(&payload.password, &hash_guardado).unwrap_or(false) {
-            return Ok(Json(AuthResponse { mensaje: "Acceso concedido".to_string(), token: Some("token_secreto_api_123".to_string()) }));
+            
+            // Generar Token Real que caduca en 2 horas
+            let expiracion = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as usize + 7200;
+            let claims = Claims { sub: payload.usuario.clone(), exp: expiracion };
+            let token_real = encode(&Header::default(), &claims, &EncodingKey::from_secret(SECRET_KEY)).unwrap();
+
+            return Ok(Json(AuthResponse { mensaje: "Acceso concedido".to_string(), token: Some(token_real) }));
         }
     }
     Err(StatusCode::UNAUTHORIZED)
@@ -88,7 +110,7 @@ async fn login(State(pool): State<Pool<Sqlite>>, Json(payload): Json<AuthRequest
 async fn crear_producto(State(pool): State<Pool<Sqlite>>, headers: HeaderMap, Json(payload): Json<ProductoRequest>) -> Result<Json<MensajeResponse>, StatusCode> {
     if !verificar_token(&headers) { return Err(StatusCode::UNAUTHORIZED); }
     sqlx::query("INSERT INTO productos (nombre, precio) VALUES (?, ?)").bind(&payload.nombre).bind(payload.precio).execute(&pool).await.unwrap();
-    Ok(Json(MensajeResponse { mensaje: "Producto registrado correctamente en SQLite".to_string() }))
+    Ok(Json(MensajeResponse { mensaje: "Producto registrado correctamente en la Base de Datos".to_string() }))
 }
 
 // --- OBTENER PRODUCTOS (GET) ---
@@ -112,8 +134,12 @@ async fn actualizar_producto(State(pool): State<Pool<Sqlite>>, Path(id): Path<u3
 #[utoipa::path(delete, path = "/api/v1/productos/{id}", params(("id" = u32, Path, description = "ID del producto")), responses((status = 200, description = "Producto eliminado", body = MensajeResponse), (status = 401, description = "Falta Token")), security(("TokenBearer" = [])))]
 async fn eliminar_producto(State(pool): State<Pool<Sqlite>>, Path(id): Path<u32>, headers: HeaderMap) -> Result<Json<MensajeResponse>, StatusCode> {
     if !verificar_token(&headers) { return Err(StatusCode::UNAUTHORIZED); }
-    sqlx::query("DELETE FROM productos WHERE id = ?").bind(id).execute(&pool).await.unwrap();
-    Ok(Json(MensajeResponse { mensaje: format!("Producto {} eliminado", id) }))
+    let result = sqlx::query("DELETE FROM productos WHERE id = ?").bind(id).execute(&pool).await.unwrap();
+    
+    if result.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND); // Si pones un ID que no existe
+    }
+    Ok(Json(MensajeResponse { mensaje: format!("Producto {} eliminado permanentemente", id) }))
 }
 
 // ==========================================
@@ -141,10 +167,10 @@ async fn main() {
         .route("/api/v1/registrar", post(registrar_usuario))
         .route("/api/v1/login", post(login))
         .route("/api/v1/productos", get(obtener_productos).post(crear_producto))
-        .route("/api/v1/productos/{id}", put(actualizar_producto).delete(eliminar_producto))
+        // 👇 AQUÍ ESTABA EL BUG: Cambié {id} por :id para que el router de Axum lo detecte correctamente
+        .route("/api/v1/productos/:id", put(actualizar_producto).delete(eliminar_producto))
         .with_state(pool);
 
-    // 👇 OJO AQUÍ 👇
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     println!("🚀 API corriendo en http://localhost:8080/swagger-ui");
     axum::serve(listener, app).await.unwrap();
