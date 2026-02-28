@@ -1,15 +1,13 @@
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    routing::{delete, get, post, put},
+    response::Redirect,
+    routing::{get, post},
     Json, Router,
 };
 use bcrypt::{hash, verify, DEFAULT_COST};
 use serde::{Deserialize, Serialize};
-use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    Pool, Row, Sqlite,
-};
+use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Pool, Row, Sqlite};
 use std::str::FromStr;
 use utoipa::{
     openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
@@ -17,132 +15,158 @@ use utoipa::{
 };
 use utoipa_swagger_ui::SwaggerUi;
 
-// --- ESTRUCTURAS ---
+// ==========================================
+// ESTRUCTURAS DE DATOS (SCHEMAS)
+// ==========================================
 #[derive(Deserialize, ToSchema)]
-struct LoginRequest { usuario: String, password: String }
+struct AuthRequest { usuario: String, password: String }
 
 #[derive(Serialize, ToSchema)]
-struct LoginResponse { mensaje: String, token: Option<String> }
+struct AuthResponse { mensaje: String, token: Option<String> }
+
+#[derive(Serialize, ToSchema)]
+struct UsuarioResponse { id: u32, username: String }
+
+#[derive(Deserialize, ToSchema)]
+struct ProductoRequest { nombre: String, precio: f64 }
+
+#[derive(Serialize, ToSchema)]
+struct ProductoResponse { id: u32, nombre: String, precio: f64 }
 
 #[derive(Serialize, ToSchema)]
 struct MensajeResponse { mensaje: String }
 
-// --- CONFIGURACIÓN DEL CANDADO EN SWAGGER (BEARER TOKEN) ---
+// ==========================================
+// SEGURIDAD (TOKEN)
+// ==========================================
 struct SecurityAddon;
 impl Modify for SecurityAddon {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         let components = openapi.components.as_mut().unwrap();
         components.add_security_scheme(
             "TokenBearer",
-            SecurityScheme::Http(
-                HttpBuilder::new()
-                    .scheme(HttpAuthScheme::Bearer)
-                    .bearer_format("JWT")
-                    .build(),
-            ),
+            SecurityScheme::Http(HttpBuilder::new().scheme(HttpAuthScheme::Bearer).bearer_format("JWT").build()),
         );
     }
 }
 
-// --- FUNCIÓN PARA VALIDAR EL TOKEN ---
 fn verificar_token(headers: &HeaderMap) -> bool {
     if let Some(auth_header) = headers.get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
-            // Verificamos que el usuario mande el token correcto
-            return auth_str == "Bearer token_secreto_universidad_123";
+            return auth_str == "Bearer token_secreto_api_123";
         }
     }
     false
 }
 
 // ==========================================
-// RUTAS HTTP (CRUD COMPLETO)
+// RUTAS (ENDPOINTS)
 // ==========================================
 
-// 1. POST (Crear sesión / Login)
-#[utoipa::path(
-    post, path = "/login", request_body = LoginRequest,
-    responses((status = 200, description = "Login exitoso", body = LoginResponse), (status = 401, description = "Error"))
-)]
-async fn login(State(pool): State<Pool<Sqlite>>, Json(payload): Json<LoginRequest>) -> Result<Json<LoginResponse>, StatusCode> {
+// --- HEALTH CHECK ---
+#[utoipa::path(get, path = "/api/v1/health", responses((status = 200, description = "Servidor OK")))]
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({"status": "ok", "mensaje": "Servidor funcionando correctamente"}))
+}
+
+// --- LOGIN ---
+#[utoipa::path(post, path = "/api/v1/login", request_body = AuthRequest, responses((status = 200, description = "Login exitoso", body = AuthResponse), (status = 401, description = "Error")))]
+async fn login(State(pool): State<Pool<Sqlite>>, Json(payload): Json<AuthRequest>) -> Result<Json<AuthResponse>, StatusCode> {
     let record = sqlx::query("SELECT password_hash FROM users WHERE username = ?")
         .bind(&payload.usuario).fetch_optional(&pool).await.unwrap();
 
     if let Some(row) = record {
         let hash_guardado: String = row.try_get("password_hash").unwrap();
         if verify(&payload.password, &hash_guardado).unwrap_or(false) {
-            return Ok(Json(LoginResponse {
-                mensaje: "Acceso concedido".to_string(),
-                token: Some("token_secreto_universidad_123".to_string()), // Retornamos el token simulado
-            }));
+            return Ok(Json(AuthResponse { mensaje: "Acceso concedido".to_string(), token: Some("token_secreto_api_123".to_string()) }));
         }
     }
     Err(StatusCode::UNAUTHORIZED)
 }
 
-// 2. GET (Leer datos protegidos)
-#[utoipa::path(
-    get, path = "/datos",
-    responses((status = 200, description = "Datos obtenidos", body = MensajeResponse), (status = 401, description = "Falta Token")),
-    security(("TokenBearer" = [])) // Esto pone el candadito en Swagger
-)]
-async fn obtener_datos(headers: HeaderMap) -> Result<Json<MensajeResponse>, StatusCode> {
-    if !verificar_token(&headers) { return Err(StatusCode::UNAUTHORIZED); }
-    Ok(Json(MensajeResponse { mensaje: "Aquí tienes los datos secretos".to_string() }))
+// --- REGISTRAR USUARIO ---
+#[utoipa::path(post, path = "/api/v1/usuarios", request_body = AuthRequest, responses((status = 201, description = "Usuario creado", body = MensajeResponse)))]
+async fn registrar_usuario(State(pool): State<Pool<Sqlite>>, Json(payload): Json<AuthRequest>) -> Result<Json<MensajeResponse>, StatusCode> {
+    let hash_pass = hash(&payload.password, DEFAULT_COST).unwrap();
+    let result = sqlx::query("INSERT INTO users (username, password_hash) VALUES (?, ?)")
+        .bind(&payload.usuario).bind(hash_pass).execute(&pool).await;
+
+    match result {
+        Ok(_) => Ok(Json(MensajeResponse { mensaje: "Usuario registrado exitosamente".to_string() })),
+        Err(_) => Err(StatusCode::BAD_REQUEST), // Falla si el usuario ya existe
+    }
 }
 
-// 3. PUT (Actualizar datos)
-#[utoipa::path(
-    put, path = "/datos/{id}",
-    params(("id" = u32, Path, description = "ID del dato a actualizar")),
-    responses((status = 200, description = "Dato actualizado", body = MensajeResponse), (status = 401, description = "Falta Token")),
-    security(("TokenBearer" = []))
-)]
-async fn actualizar_dato(Path(id): Path<u32>, headers: HeaderMap) -> Result<Json<MensajeResponse>, StatusCode> {
+// --- OBTENER TODOS LOS USUARIOS (Protegido) ---
+#[utoipa::path(get, path = "/api/v1/usuarios", responses((status = 200, description = "Lista de usuarios", body = [UsuarioResponse])), security(("TokenBearer" = [])))]
+async fn obtener_usuarios(State(pool): State<Pool<Sqlite>>, headers: HeaderMap) -> Result<Json<Vec<UsuarioResponse>>, StatusCode> {
     if !verificar_token(&headers) { return Err(StatusCode::UNAUTHORIZED); }
-    Ok(Json(MensajeResponse { mensaje: format!("El dato {} fue actualizado correctamente", id) }))
+    
+    let rows = sqlx::query("SELECT id, username FROM users").fetch_all(&pool).await.unwrap();
+    let usuarios = rows.into_iter().map(|row| UsuarioResponse {
+        id: row.try_get("id").unwrap(), username: row.try_get("username").unwrap(),
+    }).collect();
+    
+    Ok(Json(usuarios))
 }
 
-// 4. DELETE (Eliminar datos)
-#[utoipa::path(
-    delete, path = "/datos/{id}",
-    params(("id" = u32, Path, description = "ID del dato a eliminar")),
-    responses((status = 200, description = "Dato eliminado", body = MensajeResponse), (status = 401, description = "Falta Token")),
-    security(("TokenBearer" = []))
-)]
-async fn eliminar_dato(Path(id): Path<u32>, headers: HeaderMap) -> Result<Json<MensajeResponse>, StatusCode> {
+// --- OBTENER USUARIO POR ID (Protegido) ---
+#[utoipa::path(get, path = "/api/v1/usuarios/{id}", params(("id" = u32, Path, description = "ID del usuario")), responses((status = 200, description = "Usuario encontrado", body = UsuarioResponse)), security(("TokenBearer" = [])))]
+async fn obtener_usuario_id(State(pool): State<Pool<Sqlite>>, Path(id): Path<u32>, headers: HeaderMap) -> Result<Json<UsuarioResponse>, StatusCode> {
     if !verificar_token(&headers) { return Err(StatusCode::UNAUTHORIZED); }
-    Ok(Json(MensajeResponse { mensaje: format!("El dato {} fue eliminado", id) }))
+
+    let row = sqlx::query("SELECT id, username FROM users WHERE id = ?").bind(id).fetch_optional(&pool).await.unwrap();
+    match row {
+        Some(r) => Ok(Json(UsuarioResponse { id: r.try_get("id").unwrap(), username: r.try_get("username").unwrap() })),
+        None => Err(StatusCode::NOT_FOUND),
+    }
 }
 
-// --- CONFIGURACIÓN DE SWAGGER ---
+// --- INSERTAR PRODUCTO (Protegido) ---
+#[utoipa::path(post, path = "/api/v1/productos", request_body = ProductoRequest, responses((status = 201, description = "Producto creado", body = MensajeResponse)), security(("TokenBearer" = [])))]
+async fn insertar_producto(State(pool): State<Pool<Sqlite>>, headers: HeaderMap, Json(payload): Json<ProductoRequest>) -> Result<Json<MensajeResponse>, StatusCode> {
+    if !verificar_token(&headers) { return Err(StatusCode::UNAUTHORIZED); }
+
+    sqlx::query("INSERT INTO productos (nombre, precio) VALUES (?, ?)").bind(&payload.nombre).bind(payload.precio).execute(&pool).await.unwrap();
+    Ok(Json(MensajeResponse { mensaje: "Producto (Periférico) registrado correctamente".to_string() }))
+}
+
+// ==========================================
+// CONFIGURACIÓN DE SWAGGER Y SERVIDOR
+// ==========================================
 #[derive(OpenApi)]
 #[openapi(
-    paths(login, obtener_datos, actualizar_dato, eliminar_dato),
-    components(schemas(LoginRequest, LoginResponse, MensajeResponse)),
-    modifiers(&SecurityAddon) // Activamos el botón de Authorize
+    paths(health, login, registrar_usuario, obtener_usuarios, obtener_usuario_id, insertar_producto),
+    components(schemas(AuthRequest, AuthResponse, UsuarioResponse, ProductoRequest, ProductoResponse, MensajeResponse)),
+    modifiers(&SecurityAddon)
 )]
 struct ApiDoc;
 
-// --- INICIO DEL SERVIDOR ---
 #[tokio::main]
 async fn main() {
     let db_options = SqliteConnectOptions::from_str("sqlite://tarea.db").unwrap().create_if_missing(true);
     let pool = SqlitePoolOptions::new().connect_with(db_options).await.unwrap();
 
+    // Crear tablas
     sqlx::query("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT)").execute(&pool).await.unwrap();
+    sqlx::query("CREATE TABLE IF NOT EXISTS productos (id INTEGER PRIMARY KEY, nombre TEXT, precio REAL)").execute(&pool).await.unwrap();
+    
+    // Insertar admin por defecto
     let admin_pass = hash("12345", DEFAULT_COST).unwrap();
     sqlx::query("INSERT OR IGNORE INTO users (username, password_hash) VALUES ('admin', ?)").bind(admin_pass).execute(&pool).await.unwrap();
 
     let app = Router::new()
+        // La ruta raíz "/" redirige automáticamente a los documentos de Swagger
+        .route("/", get(|| async { Redirect::temporary("/swagger-ui") }))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .route("/login", post(login))
-        .route("/datos", get(obtener_datos))
-        .route("/datos/{id}", put(actualizar_dato))
-        .route("/datos/{id}", delete(eliminar_dato))
+        .route("/api/v1/health", get(health))
+        .route("/api/v1/login", post(login))
+        .route("/api/v1/usuarios", post(registrar_usuario).get(obtener_usuarios))
+        .route("/api/v1/usuarios/{id}", get(obtener_usuario_id))
+        .route("/api/v1/productos", post(insertar_producto))
         .with_state(pool);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
-    println!("🚀 API corriendo en http://localhost:8080/swagger-ui");
+    println!("🚀 Servidor corriendo. Entra a http://localhost:8080/");
     axum::serve(listener, app).await.unwrap();
 }
