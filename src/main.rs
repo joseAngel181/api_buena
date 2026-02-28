@@ -17,9 +17,7 @@ use utoipa::{
 };
 use utoipa_swagger_ui::SwaggerUi;
 
-// ==========================================
 // ESTRUCTURAS DE DATOS (SCHEMAS)
-// ==========================================
 #[derive(Deserialize, ToSchema)]
 struct AuthRequest { usuario: String, password: String }
 
@@ -35,9 +33,7 @@ struct ProductoResponse { id: u32, nombre: String, precio: f64 }
 #[derive(Serialize, ToSchema)]
 struct MensajeResponse { mensaje: String }
 
-// ==========================================
 // SEGURIDAD: JWT (JSON WEB TOKENS)
-// ==========================================
 struct SecurityAddon;
 impl Modify for SecurityAddon {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
@@ -58,7 +54,7 @@ struct Claims {
 
 const SECRET_KEY: &[u8] = b"mi_super_secreto_universitario_123";
 
-// Función para validar que el token criptográfico sea real y no haya caducado
+//Función para validar que el token criptográfico sea real y no haya caducado
 fn verificar_token(headers: &HeaderMap) -> bool {
     if let Some(auth_header) = headers.get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
@@ -72,11 +68,9 @@ fn verificar_token(headers: &HeaderMap) -> bool {
     false
 }
 
-// ==========================================
 // RUTAS (ENDPOINTS)
-// ==========================================
 
-// --- REGISTRAR USUARIO (POST) ---
+//REGISTRAR USUARIO (POST)
 #[utoipa::path(post, path = "/api/v1/registrar", request_body = AuthRequest, responses((status = 201, description = "Usuario creado", body = MensajeResponse)))]
 async fn registrar_usuario(State(pool): State<Pool<Sqlite>>, Json(payload): Json<AuthRequest>) -> Result<Json<MensajeResponse>, StatusCode> {
     let hash_pass = hash(&payload.password, DEFAULT_COST).unwrap();
@@ -86,7 +80,7 @@ async fn registrar_usuario(State(pool): State<Pool<Sqlite>>, Json(payload): Json
     }
 }
 
-// --- LOGIN Y GENERACIÓN DE JWT DINÁMICO (POST) ---
+//LOGIN Y GENERACIÓN DE JWT DINÁMICO (POST)
 #[utoipa::path(post, path = "/api/v1/login", request_body = AuthRequest, responses((status = 200, description = "Login exitoso", body = AuthResponse), (status = 401, description = "Credenciales inválidas")))]
 async fn login(State(pool): State<Pool<Sqlite>>, Json(payload): Json<AuthRequest>) -> Result<Json<AuthResponse>, StatusCode> {
     let record = sqlx::query("SELECT password_hash FROM users WHERE username = ?").bind(&payload.usuario).fetch_optional(&pool).await.unwrap();
@@ -105,7 +99,7 @@ async fn login(State(pool): State<Pool<Sqlite>>, Json(payload): Json<AuthRequest
     Err(StatusCode::UNAUTHORIZED)
 }
 
-// --- CREAR PRODUCTO (POST) ---
+//CREAR PRODUCTO (POST)
 #[utoipa::path(post, path = "/api/v1/productos", request_body = ProductoRequest, responses((status = 201, description = "Producto creado", body = MensajeResponse), (status = 401, description = "Falta Token")), security(("TokenBearer" = [])))]
 async fn crear_producto(State(pool): State<Pool<Sqlite>>, headers: HeaderMap, Json(payload): Json<ProductoRequest>) -> Result<Json<MensajeResponse>, StatusCode> {
     if !verificar_token(&headers) { return Err(StatusCode::UNAUTHORIZED); }
@@ -113,7 +107,7 @@ async fn crear_producto(State(pool): State<Pool<Sqlite>>, headers: HeaderMap, Js
     Ok(Json(MensajeResponse { mensaje: "Producto registrado correctamente en la Base de Datos".to_string() }))
 }
 
-// --- OBTENER PRODUCTOS (GET) ---
+//OBTENER PRODUCTOS (GET)
 #[utoipa::path(get, path = "/api/v1/productos", responses((status = 200, description = "Lista de productos", body = [ProductoResponse]), (status = 401, description = "Falta Token")), security(("TokenBearer" = [])))]
 async fn obtener_productos(State(pool): State<Pool<Sqlite>>, headers: HeaderMap) -> Result<Json<Vec<ProductoResponse>>, StatusCode> {
     if !verificar_token(&headers) { return Err(StatusCode::UNAUTHORIZED); }
@@ -122,7 +116,7 @@ async fn obtener_productos(State(pool): State<Pool<Sqlite>>, headers: HeaderMap)
     Ok(Json(productos))
 }
 
-// --- ACTUALIZAR PRODUCTO (PUT) ---
+//ACTUALIZAR PRODUCTO (PUT)
 #[utoipa::path(put, path = "/api/v1/productos/{id}", params(("id" = u32, Path, description = "ID del producto")), request_body = ProductoRequest, responses((status = 200, description = "Producto actualizado", body = MensajeResponse), (status = 401, description = "Falta Token")), security(("TokenBearer" = [])))]
 async fn actualizar_producto(State(pool): State<Pool<Sqlite>>, Path(id): Path<u32>, headers: HeaderMap, Json(payload): Json<ProductoRequest>) -> Result<Json<MensajeResponse>, StatusCode> {
     if !verificar_token(&headers) { return Err(StatusCode::UNAUTHORIZED); }
@@ -130,7 +124,7 @@ async fn actualizar_producto(State(pool): State<Pool<Sqlite>>, Path(id): Path<u3
     Ok(Json(MensajeResponse { mensaje: format!("Producto {} actualizado", id) }))
 }
 
-// --- ELIMINAR PRODUCTO (DELETE) ---
+//ELIMINAR PRODUCTO (DELETE)
 #[utoipa::path(delete, path = "/api/v1/productos/{id}", params(("id" = u32, Path, description = "ID del producto")), responses((status = 200, description = "Producto eliminado", body = MensajeResponse), (status = 401, description = "Falta Token")), security(("TokenBearer" = [])))]
 async fn eliminar_producto(State(pool): State<Pool<Sqlite>>, Path(id): Path<u32>, headers: HeaderMap) -> Result<Json<MensajeResponse>, StatusCode> {
     if !verificar_token(&headers) { return Err(StatusCode::UNAUTHORIZED); }
@@ -142,9 +136,7 @@ async fn eliminar_producto(State(pool): State<Pool<Sqlite>>, Path(id): Path<u32>
     Ok(Json(MensajeResponse { mensaje: format!("Producto {} eliminado permanentemente", id) }))
 }
 
-// ==========================================
 // CONFIGURACIÓN DE SWAGGER Y SERVIDOR
-// ==========================================
 #[derive(OpenApi)]
 #[openapi(
     paths(registrar_usuario, login, crear_producto, obtener_productos, actualizar_producto, eliminar_producto),
