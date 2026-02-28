@@ -47,7 +47,6 @@ impl Modify for SecurityAddon {
     }
 }
 
-// Simulador de validación de JWT
 fn verificar_token(headers: &HeaderMap) -> bool {
     if let Some(auth_header) = headers.get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
@@ -60,12 +59,6 @@ fn verificar_token(headers: &HeaderMap) -> bool {
 // ==========================================
 // RUTAS (ENDPOINTS)
 // ==========================================
-
-// --- HEALTH CHECK (GET) ---
-#[utoipa::path(get, path = "/api/v1/health", responses((status = 200, description = "Servidor OK")))]
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"status": "ok", "mensaje": "Servidor funcionando al 100%"}))
-}
 
 // --- REGISTRAR USUARIO (POST) ---
 #[utoipa::path(post, path = "/api/v1/registrar", request_body = AuthRequest, responses((status = 201, description = "Usuario creado", body = MensajeResponse)))]
@@ -95,7 +88,7 @@ async fn login(State(pool): State<Pool<Sqlite>>, Json(payload): Json<AuthRequest
 async fn crear_producto(State(pool): State<Pool<Sqlite>>, headers: HeaderMap, Json(payload): Json<ProductoRequest>) -> Result<Json<MensajeResponse>, StatusCode> {
     if !verificar_token(&headers) { return Err(StatusCode::UNAUTHORIZED); }
     sqlx::query("INSERT INTO productos (nombre, precio) VALUES (?, ?)").bind(&payload.nombre).bind(payload.precio).execute(&pool).await.unwrap();
-    Ok(Json(MensajeResponse { mensaje: "Producto (Periférico) registrado correctamente".to_string() }))
+    Ok(Json(MensajeResponse { mensaje: "Producto registrado correctamente en SQLite".to_string() }))
 }
 
 // --- OBTENER PRODUCTOS (GET) ---
@@ -128,7 +121,7 @@ async fn eliminar_producto(State(pool): State<Pool<Sqlite>>, Path(id): Path<u32>
 // ==========================================
 #[derive(OpenApi)]
 #[openapi(
-    paths(health, registrar_usuario, login, crear_producto, obtener_productos, actualizar_producto, eliminar_producto),
+    paths(registrar_usuario, login, crear_producto, obtener_productos, actualizar_producto, eliminar_producto),
     components(schemas(AuthRequest, AuthResponse, ProductoRequest, ProductoResponse, MensajeResponse)),
     modifiers(&SecurityAddon)
 )]
@@ -145,14 +138,14 @@ async fn main() {
     let app = Router::new()
         .route("/", get(|| async { Redirect::temporary("/swagger-ui") }))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .route("/api/v1/health", get(health))
         .route("/api/v1/registrar", post(registrar_usuario))
         .route("/api/v1/login", post(login))
         .route("/api/v1/productos", get(obtener_productos).post(crear_producto))
         .route("/api/v1/productos/{id}", put(actualizar_producto).delete(eliminar_producto))
         .with_state(pool);
 
+    // 👇 OJO AQUÍ 👇
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
-    println!("🚀 API corriendo en http://localhost:8080/");
+    println!("🚀 API corriendo en http://localhost:8080/swagger-ui");
     axum::serve(listener, app).await.unwrap();
 }
