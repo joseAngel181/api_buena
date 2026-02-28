@@ -1,8 +1,8 @@
-# 🚀 API RESTful - Tienda de Periféricos
+# API - Tienda de Periféricos
 
 Este repositorio contiene una API RESTful desarrollada en **Rust** orientada a la gestión del inventario de una tienda de periféricos. El proyecto implementa un sistema de autenticación, operaciones CRUD completas, base de datos local y está totalmente empaquetado para su despliegue mediante contenedores.
 
-## ⚙️ Tecnologías Utilizadas
+##Tecnologías Utilizadas
 * **Lenguaje:** Rust (v1.75+)
 * **Framework Web:** Axum (Asíncrono y de alto rendimiento)
 * **Base de Datos:** SQLite (gestionado vía `sqlx`)
@@ -10,7 +10,7 @@ Este repositorio contiene una API RESTful desarrollada en **Rust** orientada a l
 * **Documentación:** OpenAPI (Swagger UI) generado automáticamente con `utoipa`.
 * **Despliegue:** Dockerizado utilizando un entorno multi-etapa (Multi-stage build) para optimizar el peso de la imagen.
 
-## 🏗️ Arquitectura y Funcionamiento
+##Arquitectura y Funcionamiento
 La API está estructurada bajo el prefijo `/api/v1/`. Al iniciar el servidor, el sistema verifica la existencia del archivo de la base de datos `tarea.db`; de no existir, lo crea e inicializa las tablas necesarias (`users` y `productos`). 
 
 Las rutas de inventario (productos) están protegidas. Para interactuar con ellas, el flujo es el siguiente:
@@ -18,7 +18,7 @@ Las rutas de inventario (productos) están protegidas. Para interactuar con ella
 2. Se inicia sesión en `/login` para obtener un `Token de Autorización`.
 3. Dicho token se envía en las cabeceras HTTP (`Authorization: Bearer <token>`) para poder consumir los métodos `GET`, `POST`, `PUT` y `DELETE` de productos.
 
-## 📡 Endpoints Disponibles
+##Endpoints Disponibles
 
 ### Públicos
 * `GET /` : Redirige al panel interactivo de Swagger UI.
@@ -32,7 +32,7 @@ Las rutas de inventario (productos) están protegidas. Para interactuar con ella
 * `PUT /api/v1/productos/{id}` : Actualiza la información de un producto existente.
 * `DELETE /api/v1/productos/{id}` : Elimina un producto de la base de datos.
 
-## 🐳 Ejecución con Docker
+##Ejecución con Docker
 La aplicación puede ejecutarse en cualquier entorno que cuente con Docker instalado.
 
 ```bash
